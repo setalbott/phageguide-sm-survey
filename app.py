@@ -6,11 +6,12 @@ from analysis.orf_analysis import screen_phage_orfs
 from analysis.reference_evidence import get_reference_records, evidence_category_counts
 from analysis.defense_evidence import published_defense_findings, parse_defensefinder_systems, decode_defense_tsv, DefenseImportError
 from analysis.interaction_assessment import assess_uploaded_pair, reference_scenario, compare_reference_protein
+from analysis.sequence_comparison import compare_protein_sequences, format_alignment
 
 st.set_page_config(page_title="PhageGuide-SM", page_icon="🧬", layout="wide")
 
 st.title("🧬 PhageGuide-SM")
-st.caption("Survey prototype | Stage 5 evidence-assessment demo — educational research tool")
+st.caption("Survey prototype | Feedback revision: visible sequence alignment and clearer receptor evidence")
 st.info(
     "This prototype assesses available evidence, but does NOT predict a specific molecular receptor or lysis pathway for uploaded genomes. Insufficient evidence is a valid result."
 )
@@ -35,7 +36,7 @@ with st.expander("Survey instructions — 4 short tasks", expanded=True):
     st.markdown("""1. Click **Load sample DNA and bacterial FASTA**.
 2. Click **Analyze sequences**. Find the phage ORF `MK` at positions 1–9.
 3. Scroll to the **Published reference evidence** and **Stage 4 defense** sections. Notice that the cited findings do **not** describe your synthetic input.
-4. In **Stage 5**, switch between **M102AD / P42S** and **M102AD / UA159**. Find **Insufficient evidence** for the uploaded pair and explain what the exact-match comparison can and cannot show.
+4. In **Stage 5**, switch between **M102AD / P42S** and **M102AD / UA159**. Then run the built-in reference **MK versus MT** to see a visible difference. Notice that matching letters are not binding predictions.
 
 After testing, complete the separate survey link provided by the researcher. Do not submit real patient, unpublished, or confidential genome data in this public demo.""")
 
@@ -201,6 +202,8 @@ ac, bc = st.columns(2)
 ac.metric("Molecular receptor", assessment.receptor_status)
 bc.metric("Molecular lysis pathway", assessment.lysis_status)
 st.write("**Reason:**", assessment.reason)
+st.info("**What is missing?** To identify a receptor, the uploaded phage and bacterial strain would need verified identities, a specific candidate phage receptor-binding protein and bacterial surface target, and experimentally supported binding/adsorption data for that pair. To establish lysis, strain-specific infection/lysis measurements and a supported molecular pathway are needed. A binding *probability* would additionally require a validated, independently evaluated and calibrated model with training/benchmark interaction data. No such model runs here.")
+st.write("**What your upload actually shows:** DNA GC content, record lengths, ORF candidates, and optional amino-acid alignment results. These are descriptive comparisons—not host susceptibility, receptor identity, or a likelihood of binding.")
 st.write("**Sequence-based evidence:**", assessment.sequence_evidence)
 st.write("**Experiment-based evidence:**", assessment.experimental_evidence)
 st.caption(assessment.evidence_limit)
@@ -209,35 +212,65 @@ st.markdown("#### B. Published strain-specific experimental examples (reference 
 st.caption("These findings concern the named study strains. Choosing an example does NOT verify the identity or biological response of either FASTA uploaded above.")
 example_choice = st.selectbox("Choose a published phage–strain example", ["M102AD / P42S", "M102AD / UA159"], key="stage5_case")
 case = reference_scenario(example_choice)
+st.write("**Phage:**", case['phage'])
+st.write("**S. mutans study strain:**", case['bacterial_strain'])
+st.write("**Study method:**", case['experiment_type'])
 st.write("**Evidence category:**", case['evidence_class'])
 st.write("**Published observation:**", case['observation'])
+st.write("**Receptor status:**", case['receptor_evidence_status'])
+st.write("**Receptor candidate / interpretation:**", case['receptor_candidate'])
 st.write("**Receptor interpretation:**", case['receptor_result'])
+st.write("**Still missing:**", case['missing_evidence'])
 st.write("**Lysis interpretation:**", case['lysis_result'])
 st.write("**Source:**", case['source'])
 st.write("**Publication:**", case['source_url'])
 st.caption(case['limitation'])
 
-st.markdown("#### C. Optional exact protein-sequence comparison")
-st.write("Supply a **separate protein reference FASTA** and its provenance. The application compares it with phage protein input or translated Stage 3B ORFs. Identical amino-acid letters are only a sequence match, not proof of function, adsorption, susceptibility, or lysis. No reference protein FASTA is bundled as biological evidence.")
-reference_file = st.file_uploader("Reference protein FASTA (optional)", type=["fasta", "faa", "fa", "txt"], key="stage5_reference")
-reference_id = st.text_input("Reference accession / identifier (source-verified by you)", key="stage5_reference_id")
-reference_provenance = st.text_input("Reference sequence source and version / provenance", key="stage5_reference_provenance")
-if st.button("Compare phage sequences to supplied reference", key="stage5_compare"):
-    if reference_file is None:
-        st.error("Choose a reference protein FASTA file first.")
+st.markdown("#### C. Protein sequence comparison — aligned positions")
+st.write("Compare an uploaded phage protein or a translated DNA ORF with a reference protein. The app lines up amino-acid positions: `|` means the same letter, `.` means a different letter, and blank positions indicate a gap. It reports a **match count** and differences. A sequence match does **not** show receptor binding or provide a binding probability.")
+comparison_mode = st.radio("Reference sequence source", ["Built-in synthetic example", "Upload reference protein FASTA"], horizontal=True, key="comparison_mode")
+reference_text = None
+if comparison_mode == "Built-in synthetic example":
+    st.caption("Clearly synthetic sequences for demonstrating a match and a difference. Select the guided sample at the top, set ORF minimum to 2, then compare.")
+    synthetic_choice = st.selectbox("Synthetic reference to compare to phage ORF MK", ["MK — identical (2 matches)", "MT — one different amino acid (1 match)"], key="reference_sample_choice")
+    reference_seq = "MK" if synthetic_choice.startswith("MK") else "MT"
+    reference_text = f">synthetic_reference_{reference_seq}\n{reference_seq}"
+    reference_id = "SYNTHETIC-DEMO-ONLY"
+    reference_provenance = "Built-in artificial example; no real protein or experiment"
+    st.code(reference_text, language="text")
+else:
+    reference_file = st.file_uploader("Reference protein FASTA (optional)", type=["fasta", "faa", "fa", "txt"], key="stage5_reference")
+    reference_id = st.text_input("Reference accession / identifier (entered by you; not independently checked)", key="stage5_reference_id")
+    reference_provenance = st.text_input("Reference sequence source / provenance", key="stage5_reference_provenance")
+    if reference_file is not None:
+        try:
+            reference_text = decode_fasta_upload(reference_file.getvalue())
+        except SequenceInputError as exc:
+            st.error(f"Reference: {exc}")
+
+if st.button("Show aligned protein sequence comparison", key="stage5_compare_alignment"):
+    if not reference_text:
+        st.error("Provide a reference protein FASTA or choose the synthetic example.")
     elif not phage_text:
-        st.error("Paste or upload a phage sequence in Step 1 first.")
+        st.error("Supply phage DNA/protein FASTA in Step 1 first. The guided sample works here.")
     else:
         try:
-            supplied_reference = decode_fasta_upload(reference_file.getvalue())
-            rows = compare_reference_protein(phage_text, phage_type.lower(), supplied_reference,
-                                             reference_id, reference_provenance, int(orf_minimum))
+            comparison_rows = compare_protein_sequences(
+                phage_text, phage_type.lower(), reference_text,
+                reference_id, reference_provenance, int(orf_minimum))
         except (ValueError, SequenceInputError) as exc:
-            st.error(f"Comparison: {exc}")
+            st.error(f"Sequence comparison: {exc}")
         else:
-            if rows:
-                st.success(f"{len(rows)} exact protein-sequence matches found. No biological function or host interaction inferred.")
-                st.dataframe(rows, hide_index=True, use_container_width=True)
+            if not comparison_rows:
+                st.info("No qualifying translated ORFs or protein records to compare. For the synthetic DNA test, set minimum ORF length to 2.")
             else:
-                st.info("No exact protein-sequence matches found under these rules. This does not establish lack of homology or phage activity.")
-            st.warning("Reference identifier/provenance was entered by the user, not independently verified; an exact match does NOT confirm receptor binding or lysis.")
+                st.success(f"Compared {len(comparison_rows)} protein pair(s). These are sequence comparisons, not biological interaction predictions.")
+                for i, item in enumerate(comparison_rows, start=1):
+                    st.markdown(f"**Comparison {i}: {item['query_id']} vs {item['reference_id']}**")
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Matching amino acids", item['match_count'])
+                    c2.metric("Different alignment positions", item['difference_count'])
+                    c3.metric("Sequence identity in alignment", f"{item['percent_identity_over_alignment']:.1f}%")
+                    st.code(format_alignment(item), language="text")
+                    st.caption(f"{item['substitution_count']} substitutions; {item['gap_positions']} gap positions. This is a global amino-acid alignment under fixed scoring rules, not a validated homology threshold. Source: {item['reference_provenance_user_supplied']}. No functional inference.")
+                st.warning("**Interpretation for your own upload:** GC% describes DNA composition; matches and differences compare amino-acid sequences. Neither is a measure of binding probability. Experimental binding/host-range data plus a validated calibrated predictor would be required for that estimate.")

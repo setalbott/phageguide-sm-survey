@@ -47,6 +47,10 @@ def reference_scenario(scenario: str) -> dict:
             'receptor_result': 'Insufficient evidence: serotype-specific surface carbohydrates implicated, exact molecular receptor unresolved.',
             'lysis_result': 'Published phage growth/host interaction for this named strain, not an identified molecular lysis pathway.',
             'limitation': 'Not inferred for any uploaded FASTA, and not proof of a specific protein–receptor contact.',
+            'receptor_evidence_status': 'PROPOSED RECEPTOR CLASS — molecular identity unconfirmed',
+            'receptor_candidate': 'Serotype-specific cell-wall carbohydrate structures (class implicated, not a validated molecule)',
+            'experiment_type': 'Plaque/host growth and adsorption/antiserum experiments',
+            'missing_evidence': 'Direct binding evidence linking a specific M102AD RBP to a chemically identified P42S receptor; strain-linked molecular validation.',
         },
         'M102AD / UA159': {
             'phage': 'M102AD', 'bacterial_strain': 'UA159',
@@ -55,6 +59,10 @@ def reference_scenario(scenario: str) -> dict:
             'receptor_result': 'Insufficient evidence: no specific molecular receptor established.',
             'lysis_result': 'UA159 was not susceptible in the reported assay; this is not a molecular lysis-pathway assignment.',
             'limitation': 'Observed under the reported experimental conditions; does not automatically identify uploaded sequences.',
+            'receptor_evidence_status': 'UNKNOWN — no confirmed receptor for this pair',
+            'receptor_candidate': 'No individually confirmed receptor for the M102AD / UA159 pair',
+            'experiment_type': 'Published plaque/host-range panel',
+            'missing_evidence': 'Verified adsorption/binding measurements for this exact pair and direct receptor/RBP identification; susceptibility cannot be inferred from a FASTA ID.',
         },
     }
     if scenario not in cases:
