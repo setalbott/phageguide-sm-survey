@@ -11,6 +11,7 @@ from analysis.reference_evidence import get_reference_records
 from analysis.defense_evidence import published_defense_findings, parse_defensefinder_systems, decode_defense_tsv, DefenseImportError
 from analysis.interaction_assessment import assess_uploaded_pair, reference_scenario
 from analysis.sequence_comparison import compare_protein_sequences, format_alignment
+from analysis.two_upload_reference import assess_reference_pair, fetch_ncbi_reference, PHAGE_ACCESSION, BACTERIUM_ACCESSION
 from analysis.susceptibility_evidence import get_susceptibility_records, get_ksm96_serotype_totals, lookup_susceptibility, NO_RECORD, RECORDS
 
 st.set_page_config(page_title="PhageGuide-SM | Bioinformatics Workbench", page_icon="🧬", layout="wide", initial_sidebar_state="collapsed")
@@ -61,6 +62,49 @@ def show_sequence_summary(label, summary):
         st.caption("Letters alone cannot verify whether this is DNA or protein.")
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def cached_reference(accession):
+    return fetch_ncbi_reference(accession)
+
+
+def render_two_upload_benchmark(phage_text, bacteria_text, phage_type):
+    st.markdown("#### Two-upload benchmark · φAPCM01 / DPC6143")
+    st.caption("**Reference match — not a prediction.** Requires two complete DNA genomes identical to the versioned published reference sequences. FASTA headers and lengths alone are not proof of identity.")
+    if phage_type != "DNA":
+        st.info("Phage protein input cannot verify the φAPCM01 DNA genome. Upload phage DNA for the two-genome benchmark; other analysis features remain available.")
+        return
+    references = {}
+    for label, accession in (("phage", PHAGE_ACCESSION), ("bacterium", BACTERIUM_ACCESSION)):
+        try:
+            references[label] = cached_reference(accession)
+        except Exception:
+            references[label] = None
+    outcome = assess_reference_pair(phage_text, bacteria_text, references["phage"], references["bacterium"])
+    for key in ("phage", "bacterium"):
+        item = outcome[key]
+        summary = f"**{item.label} — {item.accession}**: {item.explanation}"
+        if item.status == "matched":
+            st.success(summary)
+        elif item.status == "reference_unavailable":
+            st.warning(summary)
+        else:
+            st.info(summary)
+    if outcome["both_matched"]:
+        st.success("**Verified reference match: φAPCM01 / DPC6143.** Both uploaded DNA genomes match the accession-specific published sequences exactly. The results below describe the documented laboratory pair, not a newly predicted outcome.")
+        st.markdown("**Attachment and receptor evidence**")
+        st.write("Wall & Wall (2025), Figure 1: fluorescently labeled φAPCM01 attached to DPC6143 and injected its DNA. Resistance mutations in rhamnose–glucose polysaccharide (RGP) biosynthesis genes impaired adsorption (Figures 3–4); RGP surface glycans are implicated in receptor function. This does not resolve every molecular contact or attachment protein.")
+        st.markdown("[Wall & Wall (2025), Figure 1 and receptor experiments](https://doi.org/10.1099/mic.0.001575)")
+        st.markdown("**Infection and growth observations**")
+        st.write("Dalmasso et al. (2015): φAPCM01 infected DPC6143 in the reported host-range panel (only 1 of 17 strains). In broth and artificial saliva the phage inhibited DPC6143 growth (Figure 3); in preformed biofilms metabolic activity and viable counts declined (Figure 4). These are findings for the tested strains and conditions.")
+        st.markdown("[Dalmasso et al. (2015), Figures 2–4](https://doi.org/10.1371/journal.pone.0138651)")
+        st.warning("**Molecular lysis pathway: undetermined.** Putative endolysin/lysis annotations do not experimentally establish the exact pathway or timing in this specific pair.")
+        with st.expander("Evidence interpretation and limitations"):
+            st.write("Both exact reference sequences match the known published pair. This is an identity-based evidence retrieval workflow; it does not derive infection from novel sequence combinations. Attachment, entry, growth inhibition and lysis-mechanism identification are distinct endpoints. Wall & Wall also observed DNA entry into strain UA159 without productive susceptibility, so binding does not imply infection.")
+    else:
+        st.warning("**Insufficient verification for the two-genome benchmark.** The uploaded pair is not confirmed as the published φAPCM01 / DPC6143 reference combination; study-specific receptor, growth and lysis findings are not transferred to an unverified upload.")
+    st.caption("Predicting susceptibility for unfamiliar phage–strain combinations remains an open research requirement.")
+
+
 def render_results(phage_text, bacteria_text, phage_type, orf_minimum, reference_text=None):
     summaries = {}
     for label, text, kind in (("Phage", phage_text, phage_type.lower()), ("Bacterium", bacteria_text, "dna")):
@@ -73,6 +117,7 @@ def render_results(phage_text, bacteria_text, phage_type, orf_minimum, reference
         return
 
     st.success("Validated · Both FASTA inputs passed")
+    render_two_upload_benchmark(phage_text, bacteria_text, phage_type)
     st.markdown("#### Protein alignment")
     from analysis.auto_comparison import automatic_comparison
     try:
@@ -228,14 +273,13 @@ def pair_results_page():
         if not strain:
             st.info(NO_RECORD)
             return
-        matches = [] if strain.casefold() == "all" else lookup_susceptibility(phage, strain)["records"]
+        matches = lookup_susceptibility(phage, strain)["records"]
         if not matches:
             st.info(NO_RECORD)
             st.caption("No assay outcome is available for this exact pair in the curated reference set. This is not a susceptibility prediction.")
             return
 
         record = matches[0]
-        strain = record["strain"]
         st.markdown(f"#### {phage} / {strain}")
         st.success("Published finding for the selected pair")
         if phage == "M102AD" and strain == "P42S":
@@ -277,6 +321,7 @@ def analysis_page():
     with left:
         st.markdown('<div class="pg-section-kicker">01 / INPUTS</div>', unsafe_allow_html=True)
         st.markdown("### Analyze sequences")
+        st.caption("Two-upload benchmark: use full φAPCM01 phage DNA and DPC6143 bacterial chromosome FASTA. Download versioned records from NCBI: [KR153145.1](https://www.ncbi.nlm.nih.gov/nuccore/KR153145.1?report=fasta) and [NZ_CP172847.1](https://www.ncbi.nlm.nih.gov/nuccore/NZ_CP172847.1?report=fasta). The built-in synthetic sample is for ORF/alignment testing, not the reference match.")
         st.button("Load Sample", key="survey_load_sample", on_click=load_sample, use_container_width=True)
         st.markdown("**Phage · DNA or protein**")
         phage_type = st.radio("Sequence type", ["DNA", "Protein"], horizontal=True, key="survey_phage_type")
@@ -320,6 +365,9 @@ def evidence_page():
             - **EXPERIMENTAL_PROTEOMICS / EXPERIMENTAL_HOST_PHENOTYPE**: experiments support the specific observation stated, not necessarily a direct protein–receptor pair.
             - **REVIEW_BACKGROUND**: secondary context, not experimental confirmation of an interaction.
             """)
+    with st.expander("Related literature: M102 is a different phage"):
+        st.write("Shibata, Yamashita & van der Ploeg (2009) investigated **M102**, not φAPCM01. M102 adsorption depended on the serotype-c rhamnose–glucose polysaccharide (RGP) glucose side chain: RGP-glucose-deficient mutants failed to adsorb M102. This mechanistic result must not be attributed directly to φAPCM01 or M102AD.")
+        st.markdown("[Shibata et al. (2009), FEMS Microbiology Letters](https://doi.org/10.1111/j.1574-6968.2009.01546.x)")
     with host_tab:
         st.caption("Study-specific observations, not predictions for the uploaded sample.")
         st.markdown("**Published phage–strain examples**")
