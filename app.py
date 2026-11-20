@@ -21,6 +21,7 @@ inject_theme()
 
 SAMPLE_PHAGE = ">synthetic_forward_orf\nATGAAATAG"
 SAMPLE_BACTERIA = ">synthetic_bacteria\nATGCATGC"
+SAMPLE_REFERENCE = ">synthetic_reference_MT\nMT"
 
 def load_sample():
     st.session_state["survey_phage_type"] = "DNA"
@@ -29,6 +30,8 @@ def load_sample():
     st.session_state["survey_phage_fasta"] = SAMPLE_PHAGE
     st.session_state["survey_bacteria_fasta"] = SAMPLE_BACTERIA
     st.session_state["survey_orf_min"] = 2
+    st.session_state["analysis_reference_source"] = "Paste FASTA"
+    st.session_state["analysis_reference_fasta"] = SAMPLE_REFERENCE
     st.session_state.pop("analyzed_inputs", None)  # Never show stale results after loading.
 
 
@@ -58,7 +61,7 @@ def show_sequence_summary(label, summary):
         st.caption("Letters alone cannot verify whether this is DNA or protein.")
 
 
-def render_results(phage_text, bacteria_text, phage_type, orf_minimum):
+def render_results(phage_text, bacteria_text, phage_type, orf_minimum, reference_text=None):
     summaries = {}
     for label, text, kind in (("Phage", phage_text, phage_type.lower()), ("Bacterium", bacteria_text, "dna")):
         try:
@@ -70,13 +73,37 @@ def render_results(phage_text, bacteria_text, phage_type, orf_minimum):
         return
 
     st.success("Validated · Both FASTA inputs passed")
-    a, b = st.columns(2)
-    with a:
-        show_sequence_summary("Phage", summaries["Phage"])
-    with b:
-        show_sequence_summary("Bacterium", summaries["Bacterium"])
+    st.markdown("#### Protein alignment")
+    from analysis.auto_comparison import automatic_comparison
+    try:
+        report = automatic_comparison(phage_text, phage_type, int(orf_minimum), reference_text)
+    except (ValueError, SequenceInputError) as exc:
+        st.error(f"Reference comparison: {exc}")
+    else:
+        if report["status"] != "ok":
+            st.info(report["message"])
+        else:
+            st.caption(f"{len(report['rows'])} aligned protein pair(s) · Sequence similarity only")
+            for i, item in enumerate(report["rows"], start=1):
+                st.markdown(f"**Alignment {i}: {item['query_id']} vs {item['reference_id']}**")
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Matches", item["match_count"])
+                m2.metric("Substitutions", item["substitution_count"])
+                m3.metric("Identity", f"{item['percent_identity_over_alignment']:.1f}%")
+                st.caption(f"Gaps: {item['gap_positions']} · Total differences: {item['difference_count']}")
+                st.markdown(alignment_html(item), unsafe_allow_html=True)
+                with st.expander("View alignment coordinates and scoring notes"):
+                    st.code(format_alignment(item), language="text")
+                    st.caption("Global protein alignment, not a verified functional match.")
+    st.warning("**Susceptibility for an untested phage–strain pair remains undetermined.** Amino-acid identity does not measure binding or infection probability; validated host-range or binding data would be required.")
+    with st.expander("Sequence details · Length, GC content and identifiers"):
+        a, b = st.columns(2)
+        with a:
+            show_sequence_summary("Phage", summaries["Phage"])
+        with b:
+            show_sequence_summary("Bacterium", summaries["Bacterium"])
 
-    features_tab, assessment_tab, comparison_tab = st.tabs(["Features", "Receptor / lysis", "Compare"])
+    features_tab, assessment_tab, comparison_tab = st.tabs(["Features", "Receptor / lysis", "Compare more"])
     with features_tab:
         st.markdown("**Phage sequence features**")
         st.dataframe([vars(f) for f in describe_records(phage_text, phage_type.lower())], use_container_width=True, hide_index=True)
@@ -179,10 +206,13 @@ def analysis_page():
         phage_text = input_widget("Phage", "survey_phage_source", "survey_phage_fasta", "phage", ["fasta", "fa", "faa", "fna", "txt"], ">phage_example\nATGAAATAG")
         st.markdown("**S. mutans · bacterial DNA**")
         bacteria_text = input_widget("Bacterium", "survey_bacteria_source", "survey_bacteria_fasta", "bacteria", ["fasta", "fa", "fna", "txt"], ">bacterial_example\nATGCATGC")
+        st.markdown("**Reference protein · optional**")
+        st.caption("Paste or upload a protein FASTA to include an alignment in the report.")
+        reference_text = input_widget("Reference protein", "analysis_reference_source", "analysis_reference_fasta", "analysis_reference_upload", ["fasta", "faa", "fa", "txt"], ">reference_protein\nMT")
         with st.expander("ORF options"):
             orf_minimum = st.number_input("Minimum translated protein length (aa)", min_value=1, max_value=10000, value=30, step=1, key="survey_orf_min", help="The built-in sample uses 2 amino acids.")
         if st.button("Analyze", type="primary", use_container_width=True, key="run_analysis"):
-            st.session_state["analyzed_inputs"] = (phage_text, bacteria_text, phage_type, int(orf_minimum))
+            st.session_state["analyzed_inputs"] = (phage_text, bacteria_text, phage_type, int(orf_minimum), reference_text)
         st.caption("Use public or synthetic data only. No confidential or patient sequences.")
     with right:
         st.markdown('<div class="pg-section-kicker">02 / RESULTS</div>', unsafe_allow_html=True)
@@ -293,7 +323,7 @@ def evidence_page():
 def help_page():
     st.markdown('<div class="pg-kicker">LAB NOTES · START HERE</div>', unsafe_allow_html=True)
     st.title("How to use PhageGuide-SM")
-    st.markdown("1. Go to **Analyze** and choose **Load Sample**.\n2. Click **Analyze** and look for ORF **MK** at bases **1–9**.\n3. In **Compare**, try **MK vs MK** and **MK vs MT**.\n4. Use **Published evidence** to view studies, receptor status, and predicted defenses.")
+    st.markdown("1. Go to **Analyze** and choose **Load Sample**.\n2. Click **Analyze** and look for ORF **MK** at bases **1–9**.\n3. The built-in sample automatically aligns translated **MK** against reference **MT** in the main report.\n4. Use **Published evidence** to view studies, receptor status, and predicted defenses.")
     st.info("**Insufficient evidence** means the upload lacks validated binding, infection, or lysis measurements. Sequence identity and GC% do not estimate binding probability.")
     with st.expander("What do matches and GC content mean?"):
         st.write("GC% is the fraction of unambiguous DNA bases that are G or C. Alignment matches count identical amino acids; mismatches and gaps are different positions. These measurements do not demonstrate a receptor interaction.")
